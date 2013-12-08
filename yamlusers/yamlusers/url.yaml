@@ -1,0 +1,5 @@
+path: ""
+children:
+  - path: users
+    model: all_models.auth.users.objects.all()
+    GET,PUT: all_apps.traversal.views.users.as_view()

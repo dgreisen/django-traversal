@@ -6,7 +6,7 @@ from collections import OrderedDict
 import types
 from django.utils import six
 
-from .AppRing import apps as all_apps, models as all_models
+from .appring import apps as all_apps, models as all_models
 
 splatRe = re.compile(r'^\<(.*)\>$')
 
@@ -18,17 +18,17 @@ def is_regex_match(self, path_part):
     return match.groupdict() if match else None
 
 def is_splat_match(self, path_part):
-    return {self.variables[0]: path_part}
+    return {self.path_args[0]: path_part}
 
 
 class ModelContainer(object):
     """
     an object for containing models/resultsets created during traversal.
     """
-    def __init__(self, variables=None):
+    def __init__(self, path_args=None):
         self.fns = {}
         self.stored_values = {}
-        self.variables = variables if variables is not None else VariableContainer()
+        self.path_args = path_args if path_args is not None else PathArgContainer()
 
     def __setitem__(self, key, value):
         if key in self.fns:
@@ -38,14 +38,14 @@ class ModelContainer(object):
 
     def __getitem__(self, key):
         if key not in self.stored_values:
-            self.stored_values[key] = self.fns[key](all_models, self.variables, self)
+            self.stored_values[key] = self.fns[key](all_models, self.path_args, self, None, None, None)
         return self.stored_values[key]
 
     def _get_current(self):
         return self[self._current]
     current = property(_get_current)
 
-    def db_refresh(self, key):
+    def refresh(self, key):
         """
         whatever queryset or model was at key, get it anew from the db.
         """
@@ -53,14 +53,14 @@ class ModelContainer(object):
         return self[key]
 
 
-class VariableContainer(dict):
+class PathArgContainer(dict):
     """
-    an object for containing variables created during traversal.
+    an object for containing path_args created during traversal.
     """
     def __setitem__(self, key, value):
         if key in self:
-            raise TypeError("variable exists; cannot be overwritten")
-        super(VariableContainer, self).__setitem__(key, value)
+            raise TypeError("path arg exists; cannot be overwritten")
+        super(PathArgContainer, self).__setitem__(key, value)
         self._current = [key]
 
     def update(self, d):
@@ -76,11 +76,18 @@ class VariableContainer(dict):
         return {k: v for k, v in self.items() if k in self._current}
     current = property(_get_current)
 
-def parse_methods(config):
+def _parse_methods(config):
+    """
+    return all views contained in config; split views that are separated by commas.
+
+    >>> _parse_methods({"GET": "fn1", "POST, PUT": "fn2", "other": "stuff})
+    {"GET": "fn1", "POST": "fn2", "PUT": "fn2"}
+    """
     out = {"views": {}}
     for k, v in config.items():
         # if all upper case, then it is a method
         if k.upper() == k:
+            config.pop(k)       # remove from config
             v = get_function(v) # since it is a method, we need to convert the string to a view object.
             ks = k.split(',')   # split into methods, and add to views dict
             for k in ks:
@@ -88,6 +95,7 @@ def parse_methods(config):
         else:
             out[k] = v
     return out
+
 
 class PathTree(object):
     def __init__(self, yaml=None, path=None):
@@ -103,20 +111,21 @@ class PathTree(object):
     def traverse(self, request, *args, **kwargs):
         """
         traverse the PathTree, then return the result of calling the destination view,
-        passing the variables and models accumulated during traversal
+        passing the path_args and models accumulated during traversal
         """
         path = request.path.rstrip('/').split('/')
-        view, variables, models = self.root.traverse(request, path, VariableContainer(), ModelContainer(), *args, **kwargs)
-        kwargs.update({"variables": variables, "models": models})
+        view, path_args, node = self.root.traverse(request, path, PathArgContainer(), ModelContainer(), *args, **kwargs)
+        kwargs.update(path_args)
+        kwargs["node"] = node
         return view(request, *args, **kwargs)
 
     def test_traverse(self, request, *args, **kwargs):
         """
         traverse the PathTree, just as in traverse, but instead of getting the result the traverse,
-        return a tuple of the view, accumulated variables and accumulated models. Useful for unittesting.
+        return a tuple of the view, accumulated path_args and accumulated models. Useful for unittesting.
         """
         path = request.path.rstrip('/').split('/')
-        return self.root.traverse(request, path, VariableContainer(), ModelContainer(), *args, **kwargs)
+        return self.root.traverse(request, path, PathArgContainer(), ModelContainer(), *args, **kwargs)
 
 def get_function(path):
     """
@@ -129,7 +138,7 @@ def get_function(path):
 
 
 class PathNode(object):
-    def __init__(self, path="", parent=None, regex=False, name=None, model=None, children=[], **config):
+    def __init__(self, path="", parent=None, regex=False, name=None, children=[], **config):
         self.path = path
         self.parent = parent
         self.regex = regex
@@ -138,50 +147,77 @@ class PathNode(object):
         self._create_matcher()
 
         # set name
-        self.name = name or (self.variables[0] if len(self.variables) == 1 else self.path)
+        self.name = name or (self.path_args[0] if len(self.path_args) == 1 else self.path)
 
         # create views
-        self.views = parse_methods(config)['views']
+        self.views = _parse_methods(config)['views']
 
-        # create model function
-        if model:
-            self._model = self._generate_model_generator(model)
+        # set the config dict that is used by __getattr__
+        self._config = {k: self._process_conf_item(v, k in self._force_fns) for k, v in config.items()}
+        self._config_values = {}    # where lazily created values are stored
 
         # create children and index
         self.children = [PathNode(parent=self, **child) for child in children]
         self.child_dict = {child.path: child for child in self.children}
 
-    def _generate_model_generator(self, model_string):
+    # list of all config names that should be forced to be functions, even if they don't have >>>
+    _force_fns = ["model", "qs"]
+
+    def __getattr__(self, name):
+        if name in self._config:
+            if name not in self._config_values:
+                out = self._config[name]
+                if hasattr(out, "__call__"):
+                    out = out(all_models, all_apps, self.path_args, self, self.parent)
+                self._config_values[name] = out
+            return self._config_values[name]
+        raise AttributeError("'PathNode' object has no attribute '{}'".format(name))
+
+    def refresh(self, name):
+        """
+        regenerate a conf value from conf function
+        """
+        if name in self._config_values:
+            del self._config_values[name]
+        return getattr(self, name)
+
+    def _process_conf_item(self, string, fn=False):
         """
         given a model_string that would return a queryset or model, create a function
         that will execute the string.
         """
         model_fn = """
-def a(all_models, variables, models):
+def a(all_models, all_apps, path_args, node, parent):
     return {}
 """
 
-        ns = {}
-        six.exec_(model_fn.format(model_string), ns)
-        return ns['a']
+        if ">>>" in string and string.index(">>>") == 0:
+            string = string[3:].strip()
+            fn = True
+        if fn:
+            ns = {}
+            six.exec_(model_fn.format(string), ns)
+            return ns['a']
+        else:
+            return string
 
     def _create_matcher(self):
         """
         determine type of path part and generate the search key and any supporting info
 
-        creates the match method that returns a dict of variables/values if there
+        creates the match method that returns a dict of path_args/values if there
         is a match, or null if there is not.
         """
         match = splatRe.match(self.path)
         if match:
-            self.variables = [match.groups()[0]]
+            self.path_args = [match.groups()[0]]
             self.match = types.MethodType(is_splat_match, self)
         elif self.regex:
             self.regex = re.compile(self.path)
-            self.variables = self.regex.groupindex.keys()
+            self.path_args = self.regex.groupindex.keys()
             self.match = types.MethodType(is_regex_match, self)
         else:
-            self.variables = []
+            self.path_args = []
             self.match = types.MethodType(is_string_match, self)
 
     def __getitem__(self, val):
@@ -199,7 +235,7 @@ def a(all_models, variables, models):
     model = property(_get_model)
 
 
-    def traverse(self, request, path_remainder, variables, models, *args, **kwargs):
+    def traverse(self, request, path_remainder, path_args, models, *args, **kwargs):
         """
         traverse this PathNode. 
 
@@ -209,20 +245,20 @@ def a(all_models, variables, models):
 
         if the url doesn't resolve, through an http404.
 
-        this method returns a tuple: (view, variables, models)
+        this method returns a tuple: (view, path_args, models)
         """
         # always set models to be the models object
         self.models = models
 
         path_part = path_remainder[0]
-        new_variables = self.match(path_part)
+        new_path_args = self.match(path_part)
 
-        # if new_variables is None, then we don't have a match, so return None
-        if new_variables is None:
+        # if new_path_args is None, then we don't have a match, so return None
+        if new_path_args is None:
             return None
 
-        # create the variables
-        variables.update(new_variables)
+        # create the path_args
+        path_args.update(new_path_args)
 
         # create the model (if any)
         if hasattr(self, '_model'):
@@ -235,14 +271,14 @@ def a(all_models, variables, models):
             # if there is path left then, go through each child until we find one
             # that matches, pass its response up the tree
             for child in self.children:
-                resp = child.traverse(request, path_remainder, variables, models)
+                resp = child.traverse(request, path_remainder, path_args, models)
                 if resp is not None:
                     return resp
         else:
             # if there is no path left, then try to get the view that corresponds to
-            # the request method and return it and the variables and models back up the tree
+            # the request method and return it and the path_args and models back up the tree
             try:
-                return (self.views[request.method], variables, models)
+                return (self.views[request.method], path_args, self)
             except:
                 pass
 

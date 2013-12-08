@@ -1,0 +1,6 @@
+path: ""
+children:
+  - path: users
+    model: >>> all_models.auth.User.objects.all()
+    serializer: >>> all_apps.traversal.serializers.UserSerializer
+    GET,PUT: all_apps.traversal.views.Users.as_view()
