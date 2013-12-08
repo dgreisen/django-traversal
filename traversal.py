@@ -1,12 +1,12 @@
+from __future__ import absolute_import, division, print_function, unicode_literals
 import yaml as YAML
 import re
 from django.http import Http404
 from collections import OrderedDict
 import types
 from django.utils import six
-from __future__ import absolute_import, division, print_function, unicode_literals
 
-from AppRing import apps as all_apps, models as all_models
+from .AppRing import apps as all_apps, models as all_models
 
 splatRe = re.compile(r'^\<(.*)\>$')
 
@@ -145,7 +145,7 @@ class PathNode(object):
 
         # create model function
         if model:
-            self.model = self._generate_model_generator(model)
+            self._model = self._generate_model_generator(model)
 
         # create children and index
         self.children = [PathNode(parent=self, **child) for child in children]
@@ -164,7 +164,7 @@ def a(all_models, variables, models):
         ns = {}
         six.exec_(model_fn.format(model_string), ns)
         return ns['a']
-        
+
     def _create_matcher(self):
         """
         determine type of path part and generate the search key and any supporting info
@@ -190,6 +190,15 @@ def a(all_models, variables, models):
     def __repr__(self):
         return repr({'path': self.path, 'children': [x.path for x in self.children]})
 
+    def _get_model(self):
+        if not hasattr(self, 'models'):
+            raise AttributeError("Node must be traversed to populate models")
+
+        if self._model:
+            return self.models[self.name]
+    model = property(_get_model)
+
+
     def traverse(self, request, path_remainder, variables, models, *args, **kwargs):
         """
         traverse this PathNode. 
@@ -202,6 +211,9 @@ def a(all_models, variables, models):
 
         this method returns a tuple: (view, variables, models)
         """
+        # always set models to be the models object
+        self.models = models
+
         path_part = path_remainder[0]
         new_variables = self.match(path_part)
 
@@ -213,8 +225,8 @@ def a(all_models, variables, models):
         variables.update(new_variables)
 
         # create the model (if any)
-        if hasattr(self, 'model'):
-            models[self.name] = self.model
+        if hasattr(self, '_model'):
+            models[self.name] = self._model
 
         # remove the path part that matches this node
         path_remainder.pop(0)

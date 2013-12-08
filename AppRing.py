@@ -38,7 +38,7 @@ class ModelPackage(object):
                 self.models = {x.__name__: x for x in models}
             return self.models[name]
         except:
-            raise AttributeError("object '{}' has no attribute '{}'".format(self.name, name))
+            raise ImportError("No app named '{}'".format(self.name, name))
 
 
 class Apps(object):
@@ -56,7 +56,7 @@ class Apps(object):
             setattr(self, name, package)
             return package
         except:
-            raise AttributeError("object 'Apps' has no attribute '{}'".format(name))
+            raise ImportError("No app named '{}'".format(name))
 
 class ModuleWrapper(object):
     def __init__(self, module, path):

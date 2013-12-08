@@ -1,5 +1,5 @@
 from django.test import TestCase
-from traversal import PathNode, PathTree, ModelContainer, VariableContainer, all_apps, all_models
+from .traversal import PathNode, PathTree, ModelContainer, VariableContainer, all_apps, all_models
 from django.http import HttpRequest as Request, HttpResponse
 from django.contrib.auth.models import User, Group
 
@@ -31,11 +31,11 @@ path: ""
 children:
   - path: users
     model: all_models.auth.User.objects.all()
-    GET: all_apps.traverse.tests.testView
+    GET: all_apps.traversal.tests.testView
     children:
       - path: <user>
         model: models['users'].get(pk=variables['user'])
-        GET,POST: all_apps.traverse.tests.testView
+        GET,POST: all_apps.traversal.tests.testView
 """
         request = Request()
         request.path = "/users/1"
@@ -53,11 +53,11 @@ path: ""
 children:
   - path: users
     model: all_models.auth.User.objects.all()
-    GET: all_apps.traverse.tests.testView
+    GET: all_apps.traversal.tests.testView
     children:
       - path: <user>
         model: models['users'].get(pk=variables['user'])
-        GET,POST: all_apps.traverse.tests.testView
+        GET,POST: all_apps.traversal.tests.testView
 """
         request = Request()
         request.path = "/users/1"
@@ -133,10 +133,10 @@ class TestPathNode(TestCase):
         actual = cut["second"]
         self.assertIsInstance(actual, PathNode)
 
-    def test_created_with_queryset_creates_model_function_that_returns_queryset(self):
+    def test_created_with_queryset_creates__model_function_that_returns_queryset(self):
         cut = PathNode(path="users", model="all_models.auth.User.objects.all()")
         
-        actual = cut.model(all_models, VariableContainer(), ModelContainer())
+        actual = cut._model(all_models, VariableContainer(), ModelContainer())
 
         self.assertIsInstance(actual, type(all_models.auth.User.objects.all()))
 
@@ -233,6 +233,32 @@ class TestPathNode(TestCase):
         self.assertEqual(actual, {"id": "hello"})
 
 # traverse
+    def test_traverse_adds_models_container_at_models_attribute(self):
+        req = Request()
+        req.method = "GET"
+        modelcontainer = ModelContainer()
+        cut = PathNode(path="", children=[{"path": "first"}, {"path": "second"}], GET="all_apps.auth.views.login")
+
+        cut.traverse(req, [""], VariableContainer(), modelcontainer)
+
+        actual = cut.models
+
+        self.assertIs(actual, modelcontainer)
+
+    def test_model_attribute_exists_after_traverse(self):
+        req = Request()
+        req.method = "GET"
+        user = User(username="testuser")
+        user.save()
+        modelcontainer = ModelContainer()
+        cut = PathNode(path="", children=[{"path": "first"}, {"path": "second"}], GET="all_apps.auth.views.login", model="all_models.auth.User.objects.get(pk={})".format(user.id))
+
+        cut.traverse(req, [""], VariableContainer(), modelcontainer)
+
+        actual = cut.model
+
+        self.assertEqual(actual, user)
+
     def test_traverse_one_path_remainder(self):
         req = Request()
         req.method = "GET"
@@ -267,6 +293,7 @@ class TestPathNode(TestCase):
         actual = cut.traverse(req, [str(user.id)], variablecontainer, modelcontainer)
 
         self.assertEqual(actual[2]["user"], user)
+
 
 class TestModelContainer(TestCase):
     def test_create_when_passed_variablecontainer_expect_add_variables_attribute(self):
