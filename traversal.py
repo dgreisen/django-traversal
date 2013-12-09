@@ -157,25 +157,26 @@ class PathNode(object):
             del self._config_values[name]
         return getattr(self, name)
 
-    def _process_conf_item(self, string, fn=False):
+    def _process_conf_item(self, item, fn=False):
         """
-        given a model_string that would return a queryset or model, create a function
-        that will execute the string.
+        process an item. item could be anything. if it is a string representing
+        a function, convert to function. otherwise, pass through.
         """
         model_fn = """
 def a(all_models, all_apps, path_args, node, parent):
     return {}
 """
-
-        if ">>>" in string and string.index(">>>") == 0:
-            string = string[3:].strip()
+        if not hasattr(item, "strip"):
+            return item
+        if ">>>" in item and item.index(">>>") == 0:
+            item = item[3:].strip()
             fn = True
         if fn:
             ns = {}
-            six.exec_(model_fn.format(string), ns)
+            six.exec_(model_fn.format(item), ns)
             return ns['a']
         else:
-            return string
+            return item
 
     def _create_matcher(self):
         """

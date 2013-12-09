@@ -9,3 +9,22 @@ children:
         model: ">>> parent.qs.get(pk=path_args['user'])"
         serializer: ">>> parent.serializer"
         GET, PUT: all_apps.traversal.views.Rest.as_view()
+        children:
+          - path: groups
+            qs: ">>> all_models.auth.Group.objects.filter(user__pk=path_args['user'])"
+            serializer: ">>> all_apps.traversal.serializers.GroupSerializer"
+            GET,POST: all_apps.traversal.views.Rest.as_view()
+            children:
+              - path: <group|d>
+                model: ">>> parent.qs.get(pk=path_args['group'])"
+                serializer: ">>> parent.serializer"
+                GET, PUT: all_apps.traversal.views.Rest.as_view()
+  - path: groups
+    qs: ">>> all_models.auth.Group.objects.all()"
+    serializer: ">>> all_apps.traversal.serializers.GroupSerializer"
+    GET,POST: all_apps.traversal.views.Rest.as_view()
+    children:
+      - path: <group|d>
+        model: ">>> parent.qs.get(pk=path_args['group'])"
+        serializer: ">>> parent.serializer"
+        GET, PUT: all_apps.traversal.views.Rest.as_view()

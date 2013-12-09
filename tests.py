@@ -187,6 +187,13 @@ class TestPathNode(TestCase):
 
         self.assertEqual(actual, 12)
 
+    def test_created_with_int_config_arg_expect_arg_to_be_gettable(self):
+        cut = PathNode(path="", conf1=5)
+
+        actual = cut.conf1
+
+        self.assertEqual(actual, 5)
+
 # __getattr__
     def test_getattr_returns_attributeerror_if_not_in_conf(self):
         cut = PathNode(path="", conf1="hello")
@@ -199,9 +206,17 @@ class TestPathNode(TestCase):
 
         first_call = cut.conf1
 
-        actual = cut = cut.conf1
+        actual = cut.conf1
 
         self.assertIs(actual, first_call)
+
+# __hasattr__
+    def test_hasattr_returns_true_if_key_in_config(self):
+        cut = PathNode(path="", conf1=">>> []")
+
+        actual = hasattr(cut, "conf1")
+
+        self.assertTrue(actual)
 
 # refresh
     def test_refresh_with_conf_value_ensures_value_regenerated_by_fn(self):

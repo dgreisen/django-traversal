@@ -10,14 +10,15 @@ from rest_framework import status
 
 class Rest(APIView):
     def get(self, request, node, *args, **kwargs):
-        print kwargs
         if hasattr(node, "qs"):
+            print "in "
             serializer = node.serializer(node.qs, many=True)
         else:
             serializer = node.serializer(node.model)
         return Response(serializer.data)
 
     def post(self, request, node, *args, **kwargs):
+        print("NODE post", node.name, node._config)
         serializer = node.serializer(data=request.DATA)
         if serializer.is_valid():
             serializer.save()
@@ -27,6 +28,7 @@ class Rest(APIView):
         pass
 
     def put(self, request, node, *args, **kwargs):
+        print("NODE put", node.name, node._config)
         serializer = node.serializer(node.model, data=request.DATA)
         if serializer.is_valid():
             serializer.save()
