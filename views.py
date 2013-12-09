@@ -4,15 +4,32 @@
 # rest framework is not required to use traversal,
 # however it is needed to run the example application.
 
-from django.views.generic import View
-from django.http import HttpResponse
-from django.contrib.auth.models import User, Group
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
 
+class Rest(APIView):
+    def get(self, request, node, *args, **kwargs):
+        print kwargs
+        if hasattr(node, "qs"):
+            serializer = node.serializer(node.qs, many=True)
+        else:
+            serializer = node.serializer(node.model)
+        return Response(serializer.data)
 
-class Users(View):
-    def get(self, request, models, variables, *args, **kwargs):
-        serializer = UserSerializer(models["users"], many=True)
-        return HttpResponse(serializer.data)
-
-    def put(self, request, models, variables, *args, **kwargs):
+    def post(self, request, node, *args, **kwargs):
+        serializer = node.serializer(data=request.DATA)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         pass
+
+    def put(self, request, node, *args, **kwargs):
+        serializer = node.serializer(node.model, data=request.DATA)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

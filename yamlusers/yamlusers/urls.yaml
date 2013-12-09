@@ -1,6 +1,11 @@
 path: ""
 children:
   - path: users
-    model: >>> all_models.auth.User.objects.all()
-    serializer: >>> all_apps.traversal.serializers.UserSerializer
-    GET,PUT: all_apps.traversal.views.Users.as_view()
+    qs: ">>> all_models.auth.User.objects.all()"
+    serializer: ">>> all_apps.traversal.serializers.UserSerializer"
+    GET,POST: all_apps.traversal.views.Rest.as_view()
+    children:
+      - path: <user|d>
+        model: ">>> parent.qs.get(pk=path_args['user'])"
+        serializer: ">>> parent.serializer"
+        GET, PUT: all_apps.traversal.views.Rest.as_view()

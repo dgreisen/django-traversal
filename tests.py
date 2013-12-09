@@ -1,5 +1,5 @@
 from django.test import TestCase
-from .traversal import PathNode, PathTree, ModelContainer, PathArgContainer, all_apps, all_models
+from .traversal import PathNode, PathTree, PathArgContainer, all_apps, all_models
 from django.http import HttpRequest as Request, HttpResponse
 from django.contrib.auth.models import User, Group
 
@@ -134,13 +134,13 @@ class TestPathNode(TestCase):
     def test_created_with_regex_path_expect_path_args_to_list_path_args(self):
         cut = PathNode(path="^(?P<id>\d*)$", regex=True)
 
-        actual = cut.path_args
+        actual = cut.node_args
         self.assertEqual(actual, ['id'])
 
     def test_created_with_splat_path_expect_path_args_to_list_path_args(self):
         cut = PathNode(path="<id>")
         
-        actual = cut.path_args
+        actual = cut.node_args
         self.assertEqual(actual, ['id'])
 
     def test_created_with_name_override_default_name(self):
@@ -287,7 +287,7 @@ class TestPathNode(TestCase):
 
         actual = cut.match('hello')
 
-        self.assertEqual(actual, None)
+        self.assertIsNone(actual)
 
     def test_match_when_passed_string_matching_regex_path_expect_dict_with_path_args(self):
         cut = PathNode(path="^(?P<id>\d*)$", regex=True)
@@ -301,7 +301,7 @@ class TestPathNode(TestCase):
 
         actual = cut.match('hello')
 
-        self.assertEqual(actual, None)
+        self.assertIsNone(actual)
 
     def test_match_when_passed_string_matching_splat_expect_dict_with_path_args(self):
         cut = PathNode(path="<id>")
@@ -309,57 +309,80 @@ class TestPathNode(TestCase):
         actual = cut.match("hello")
         self.assertEqual(actual, {"id": "hello"})
 
+    def test_match_when_passed_string_matching_int_splat_expect_dict_with_int_path_arg(self):
+        cut = PathNode(path="<id|d>")
+        
+        actual = cut.match("5")
+        self.assertEqual(actual, {"id": 5})
+
+    def test_match_when_passed_string_not_matching_int_splat_expect_none(self):
+        cut = PathNode(path="<id|d>")
+        
+        actual = cut.match("h5n1")
+        self.assertIsNone(actual)
+
 # traverse
-    def test_traverse_adds_models_container_at_models_attribute(self):
+    def test_after_traverse_expect_path_args_attribute_exists(self):
+        path_args = PathArgContainer()
         req = Request()
         req.method = "GET"
-        modelcontainer = ModelContainer()
         cut = PathNode(path="", children=[{"path": "first"}, {"path": "second"}], GET="all_apps.auth.views.login")
 
-        cut.traverse(req, [""], PathArgContainer(), modelcontainer)
+        cut.traverse(req, [""], path_args)
 
-        actual = cut.models
+        actual = cut.path_args
 
-        self.assertIs(actual, modelcontainer)
+        self.assertEqual(actual, path_args)
 
-    def test_model_attribute_exists_after_traverse(self):
+    def test_after_traverse_expect_model_attribute_exists(self):
         req = Request()
         req.method = "GET"
         user = User(username="testuser")
         user.save()
-        modelcontainer = ModelContainer()
         cut = PathNode(path="", children=[{"path": "first"}, {"path": "second"}], GET="all_apps.auth.views.login", model="all_models.auth.User.objects.get(pk={})".format(user.id))
 
-        cut.traverse(req, [""], PathArgContainer(), modelcontainer)
+        cut.traverse(req, [""], PathArgContainer())
 
         actual = cut.model
 
         self.assertEqual(actual, user)
 
+    def test_config_refreshed_after_traverse(self):
+        req = Request()
+        req.method = "GET"
+        cut = PathNode(path="", test= ">>> []", children=[{"path": "first"}, {"path": "second"}], GET="all_apps.auth.views.login")
+
+        first_call = cut.test
+
+        cut.traverse(req, [""], PathArgContainer())
+
+        actual = cut.test
+
+        self.assertIsNot(actual, first_call)
+
+
     def test_traverse_one_path_remainder(self):
         req = Request()
         req.method = "GET"
         pathNode = PathNode(path="", children=[{"path": "first"}, {"path": "second"}], GET="all_apps.auth.views.login")
-        result = pathNode.traverse(req, [""], PathArgContainer(), ModelContainer())
+        result = pathNode.traverse(req, [""], PathArgContainer())
         self.assertEqual(result[0], all_apps.auth.views.login)
 
     def test_traverse_two_path_remainder(self):
         req = Request()
         req.method = "GET"
         pathNode = PathNode(path="", children=[{"path": "first", "GET": "all_apps.auth.views.logout"}, {"path": "second"}], GET="all_apps.auth.views.login")
-        result = pathNode.traverse(req, ['', 'first'], PathArgContainer(), ModelContainer())
+        result = pathNode.traverse(req, ['', 'first'], PathArgContainer())
         self.assertEqual(result[0], all_apps.auth.views.logout)
 
     def test_traverse_returns_variable(self):
         req = Request()
         req.method = "GET"
         pathNode = PathNode(path="<user>", GET="all_apps.auth.views.login")
-        result = pathNode.traverse(req, ["1"], PathArgContainer(), ModelContainer())
+        result = pathNode.traverse(req, ["1"], PathArgContainer())
         self.assertEqual(result[1]['user'], "1")
 
     def test_traverse_returns_node(self):
-        pathargcontainer = PathArgContainer()
-        modelcontainer = ModelContainer(path_args=pathargcontainer)
         user = all_models.auth.User(username='testuser')
         user.save()
         req = Request()
@@ -367,127 +390,10 @@ class TestPathNode(TestCase):
 
         cut = PathNode(path="<user>", GET="all_apps.auth.views.login", model="all_models.auth.User.objects.get(pk=path_args['user'])")
 
-        actual = cut.traverse(req, [str(user.id)], pathargcontainer, modelcontainer)
+        actual = cut.traverse(req, [str(user.id)], PathArgContainer())
 
         self.assertIsInstance(actual[2], PathNode)
 
-
-# class TestModelContainer(TestCase):
-#     def test_create_when_passed_pathargcontainer_expect_add_path_args_attribute(self):
-#         path_args = PathArgContainer()
-
-#         cut = ModelContainer(path_args=path_args)
-
-#         actual = cut.path_args
-
-#         self.assertIs(actual, path_args)
-
-#     def test_create_when_not_passed_pathargcontainer_expect_add_empty_path_args_attribute(self):
-#         cut = ModelContainer()
-
-#         actual = cut.path_args
-
-#         self.assertIsInstance(actual, PathArgContainer)
-
-#     def test_getitem_returns_value_of_fn_stored_by_setitem(self):
-#         cut = ModelContainer()
-
-#         def fn(*args, **kwargs):
-#             return []
-
-#         cut["test"] = fn
-
-#         actual = cut["test"]
-
-#         self.assertEqual(actual, fn())
-
-#     def test_getitem_only_runs_fn_once_stores_value_for_future_getitems(self):
-#         cut = ModelContainer()
-
-#         def fn(*args, **kwargs):
-#             return []
-
-#         cut["test"] = fn
-
-#         first_call = cut["test"]
-
-#         actual = cut["test"]
-#         self.assertIs(actual, first_call)
-
-#     def test_setitem_called_with_existing_key_expect_raise_typeerror(self):
-#         cut = ModelContainer()
-
-#         def fn(*args, **kwargs):
-#             return []
-
-#         cut["test"] = fn
-
-#         with self.assertRaises(TypeError):
-#             cut["test"] = fn
-
-#     def test_getitem_expect_passes_all_models_to_fn(self):
-#         cut = ModelContainer()
-
-#         def fn(*args, **kwargs):
-#             return args
-
-#         cut["test"] = fn
-
-#         actual = cut["test"]
-
-#         self.assertEqual(actual[0], all_models)
-
-#     def test_getitem_expect_passes_path_args_to_fn(self):
-#         cut = ModelContainer()
-
-#         def fn(*args, **kwargs):
-#             return args
-
-#         cut["test"] = fn
-
-#         actual = cut["test"]
-
-#         self.assertIsInstance(actual[1], PathArgContainer)
-
-#     def test_getitem_expect_passes_models_to_fn(self):
-#         cut = ModelContainer()
-
-#         def fn(*args, **kwargs):
-#             return args
-
-#         cut["test"] = fn
-
-#         actual = cut["test"]
-
-#         self.assertIsInstance(actual[2], ModelContainer)
-
-#     def test_setitem_stores_most_recently_set_item_in_current(self):
-#         cut = ModelContainer()
-
-#         def fn(*args, **kwargs):
-#             return []
-
-#         cut["test"] = fn
-
-#         actual = cut.current
-#         self.assertIs(actual, cut["test"])
-
-#     def test_refresh_when_passed_key_expect_refresh_from_function_at_key(self):
-#         cut = ModelContainer()
-
-#         def fn(*args, **kwargs):
-#             return []
-
-#         cut["test"] = fn
-
-#         first_call = cut["test"]
-
-#         actual = cut.refresh("test")
-#         self.assertIsNot(actual, first_call)
-
-#         actual2 = cut["test"]
-
-#         self.assertIs(actual, actual2)
 
 class TestPathArgContainer(TestCase):
     def test_getitem_returns_value_of_fn_stored_by_setitem(self):

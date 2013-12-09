@@ -8,7 +8,7 @@ from django.utils import six
 
 from .appring import apps as all_apps, models as all_models
 
-splatRe = re.compile(r'^\<(.*)\>$')
+splatRe = re.compile(r'^\<(\w*)(?:\|(\w*))?\>$')
 
 def is_string_match(self, path_part):
     return {} if path_part == self.path else None
@@ -18,40 +18,13 @@ def is_regex_match(self, path_part):
     return match.groupdict() if match else None
 
 def is_splat_match(self, path_part):
-    return {self.path_args[0]: path_part}
+    return {self.node_args[0]: path_part}
 
-
-class ModelContainer(object):
-    """
-    an object for containing models/resultsets created during traversal.
-    """
-    def __init__(self, path_args=None):
-        self.fns = {}
-        self.stored_values = {}
-        self.path_args = path_args if path_args is not None else PathArgContainer()
-
-    def __setitem__(self, key, value):
-        if key in self.fns:
-            raise TypeError("model exists; cannot be overwritten")
-        self.fns[key] = value
-        self._current = key
-
-    def __getitem__(self, key):
-        if key not in self.stored_values:
-            self.stored_values[key] = self.fns[key](all_models, self.path_args, self, None, None, None)
-        return self.stored_values[key]
-
-    def _get_current(self):
-        return self[self._current]
-    current = property(_get_current)
-
-    def refresh(self, key):
-        """
-        whatever queryset or model was at key, get it anew from the db.
-        """
-        self.stored_values[key] = self.fns[key]()
-        return self[key]
-
+def is_int_match(self, path_part):
+    try:
+        return {self.node_args[0]: int(path_part)}
+    except:
+        return None
 
 class PathArgContainer(dict):
     """
@@ -114,7 +87,7 @@ class PathTree(object):
         passing the path_args and models accumulated during traversal
         """
         path = request.path.rstrip('/').split('/')
-        view, path_args, node = self.root.traverse(request, path, PathArgContainer(), ModelContainer(), *args, **kwargs)
+        view, path_args, node = self.root.traverse(request, path, PathArgContainer(), *args, **kwargs)
         kwargs.update(path_args)
         kwargs["node"] = node
         return view(request, *args, **kwargs)
@@ -125,7 +98,7 @@ class PathTree(object):
         return a tuple of the view, accumulated path_args and accumulated models. Useful for unittesting.
         """
         path = request.path.rstrip('/').split('/')
-        return self.root.traverse(request, path, PathArgContainer(), ModelContainer(), *args, **kwargs)
+        return self.root.traverse(request, path, PathArgContainer(), *args, **kwargs)
 
 def get_function(path):
     """
@@ -147,7 +120,7 @@ class PathNode(object):
         self._create_matcher()
 
         # set name
-        self.name = name or (self.path_args[0] if len(self.path_args) == 1 else self.path)
+        self.name = name or (self.node_args[0] if len(self.node_args) == 1 else self.path)
 
         # create views
         self.views = _parse_methods(config)['views']
@@ -162,6 +135,9 @@ class PathNode(object):
 
     # list of all config names that should be forced to be functions, even if they don't have >>>
     _force_fns = ["model", "qs"]
+
+    # populated during traversal
+    path_args = None
 
     def __getattr__(self, name):
         if name in self._config:
@@ -205,19 +181,23 @@ def a(all_models, all_apps, path_args, node, parent):
         """
         determine type of path part and generate the search key and any supporting info
 
-        creates the match method that returns a dict of path_args/values if there
+        creates the match method that returns a dict of node_args/values if there
         is a match, or null if there is not.
         """
         match = splatRe.match(self.path)
         if match:
-            self.path_args = [match.groups()[0]]
-            self.match = types.MethodType(is_splat_match, self)
+            g = match.groups()
+            self.node_args = [g[0]]
+            if g[1] == "d":
+                self.match = types.MethodType(is_int_match, self)
+            else:
+                self.match = types.MethodType(is_splat_match, self)
         elif self.regex:
             self.regex = re.compile(self.path)
-            self.path_args = self.regex.groupindex.keys()
+            self.node_args = self.regex.groupindex.keys()
             self.match = types.MethodType(is_regex_match, self)
         else:
-            self.path_args = []
+            self.node_args = []
             self.match = types.MethodType(is_string_match, self)
 
     def __getitem__(self, val):
@@ -226,16 +206,7 @@ def a(all_models, all_apps, path_args, node, parent):
     def __repr__(self):
         return repr({'path': self.path, 'children': [x.path for x in self.children]})
 
-    def _get_model(self):
-        if not hasattr(self, 'models'):
-            raise AttributeError("Node must be traversed to populate models")
-
-        if self._model:
-            return self.models[self.name]
-    model = property(_get_model)
-
-
-    def traverse(self, request, path_remainder, path_args, models, *args, **kwargs):
+    def traverse(self, request, path_remainder, path_args, *args, **kwargs):
         """
         traverse this PathNode. 
 
@@ -245,10 +216,12 @@ def a(all_models, all_apps, path_args, node, parent):
 
         if the url doesn't resolve, through an http404.
 
-        this method returns a tuple: (view, path_args, models)
+        this method returns a tuple: (view, path_args)
         """
-        # always set models to be the models object
-        self.models = models
+        # reset all stored config values
+        self._config_values = {}
+        # set the path_args
+        self.path_args = path_args
 
         path_part = path_remainder[0]
         new_path_args = self.match(path_part)
@@ -260,10 +233,6 @@ def a(all_models, all_apps, path_args, node, parent):
         # create the path_args
         path_args.update(new_path_args)
 
-        # create the model (if any)
-        if hasattr(self, '_model'):
-            models[self.name] = self._model
-
         # remove the path part that matches this node
         path_remainder.pop(0)
 
@@ -271,12 +240,12 @@ def a(all_models, all_apps, path_args, node, parent):
             # if there is path left then, go through each child until we find one
             # that matches, pass its response up the tree
             for child in self.children:
-                resp = child.traverse(request, path_remainder, path_args, models)
+                resp = child.traverse(request, path_remainder, path_args)
                 if resp is not None:
                     return resp
         else:
             # if there is no path left, then try to get the view that corresponds to
-            # the request method and return it and the path_args and models back up the tree
+            # the request method and return it and the path_args and node back up the tree
             try:
                 return (self.views[request.method], path_args, self)
             except:
